@@ -9,32 +9,58 @@ _TOKEN_UNKNOWN = 0
 _TOKEN_NAME = 1
 _TOKEN_NUMBER = 2
 _TOKEN_STRING = 3
+_TOKEN_BOOLEAN = 4
+_TOKEN_NONE = 5
 
 class LuaParseError(Exception):
     pass
 
 class _Token:
-    def __init__(self):
-        self._type = _TOKEN_UNKNOWN
-
     def getType(self):
         return self._type
 
+class _TOKEN_UNKNOWN:
+    def __init__(self):
+        self._type = _TOKEN_UNKNOWN
+
 class _TokenName(_Token):
-    def __init__(self, text):
+    def __init__(self, strName):
         self._type = _TOKEN_NAME
-        self._text = text
+        self._strName = strName
 
     def getValue(self):
-        return str(text)
+        return self._strName
+
+class _TokenNumber(_Token):
+    def __init__(self, number):
+        self._type = _TOKEN_NUMBER
+        self._value = number
+
+    def getValue(self):
+        return self._value
 
 class _TokenString(_Token):
-    def __init__(self, text):
+    def __init__(self, pystr):
         self._type = _TOKEN_STRING
-        self._text = text
+        self._value = pystr
 
     def getValue(self):
-        return str(text)
+        return self._value
+
+class _TokenBoolean(_Token):
+    def __init__(self, value):
+        self._type = _TOKEN_BOOLEAN
+        self._value = value
+
+    def getValue(self):
+        return self._value
+
+class _TokenNone(_Token):
+    def __init__(self):
+        self._type = _TOKEN_NONE
+
+    def getValue(self):
+        return None
 
 class _Text:
     def __init__(self, text, lIndex, rIndex):
@@ -62,12 +88,12 @@ class _Text:
         result = self._text[self._current]
         return result
 
-    def nextToken(self):
-        token = self.tryNextToken()
+    def nextTokenText(self):
+        token = self.tryNextTokenText()
         self._current = token._end
         return token
 
-    def tryNextToken(self):
+    def tryNextTokenText(self):
         self.trim()
         start = self._current
         index = self._current
@@ -84,14 +110,20 @@ class _Text:
         return self._text[self._current]
 
     def nextTokenBefore(self, clist):
-        self.trim()
+        c = self.nextTokenChar()
+        if(c == '\'' or c == '\"'):
+            read_string = self.nextString()
+            token = _TokenString(read_string)
+            return token
+            
         start = self._current
         index = self._current
         while(index < self._length and self._text[index] not in clist and self._text[index] not in _trim_separators):
             index += 1 
         end = index 
         self._current = index
-        return _Text(self, start, end)
+        text = _Text(self, start, end)
+        return _Text._parseTokenFromText(text)
 
     def nextString(self):
         self.trim()
@@ -122,6 +154,61 @@ class _Text:
 
     def __str__(self):
         return self._text[self._start:self._end]
+
+    @staticmethod
+    def _parseTokenFromText(text):
+        tokenStr = str(text)
+        if(len(tokenStr) == 0):
+            return None
+        if(tokenStr == 'nil'):
+            return _TokenNone()
+        if(tokenStr == 'true'):
+            return _TokenBoolean(True)
+        if(tokenStr == 'false'):
+            return _TokenBoolean(False)
+
+        (isNumber, number) = _Text._tryParseNumber(tokenStr)
+        if(isNumber):
+            return _TokenNumber(number)
+        
+        if _Text._isLuaName(tokenStr):
+            return _TokenName(tokenStr)
+
+        message =  'Unrecognized token \'' + tokenStr + '\''
+        raise LuaParseError(message)
+
+    @staticmethod
+    def _tryParseNumber(s):
+        try:
+            number = int(s)
+            return(True, number)
+        except Exception:
+            try:
+                number = float(s)
+                return(True, number)
+            except Exception:
+                return (False, None)
+
+    @staticmethod
+    def _tryParseString(s):
+        try:
+            result = eval(s)
+            if(not isinstance(result, basestring)):
+                return (False, None)
+            return (True, result)
+        except SyntaxError:
+            return (False, None)
+
+    @staticmethod
+    def _isLuaName(s):
+        if s[0].isdigit():
+            return False
+        for c in s:
+            if(c.isalpha() == False and c != '_'):
+                return False
+        if s in _lua_keyword:
+            return False
+        return True
 
 class PyLuaTblParser:
     #----------constructor--------------------
@@ -181,7 +268,7 @@ class PyLuaTblParser:
         self._text.trim()
         c = self._text.nextChar()
         if(c != '{'):
-            message =  'Expecting \'{\' when parsing table. Got \'' + str(self._text.nextToken()) + '\''
+            message =  'Expecting \'{\' when parsing table. Got \'' + str(self._text.nextTokenText()) + '\''
             raise LuaParseError(message)
         self._text.moveNext()
         self._text.trim()
@@ -190,7 +277,7 @@ class PyLuaTblParser:
         
         result = self._nextFieldList()
         if(self._text.nextChar() != '}'):
-            message =  'Expecting \'}\' when parsing table. Got \'' + str(self._text.nextToken()) + '\''
+            message =  'Expecting \'}\' when parsing table. Got \'' + str(self._text.nextTokenText()) + '\''
             raise LuaParseError(message)
         self._text.moveNext()
         return result
@@ -224,7 +311,7 @@ class PyLuaTblParser:
             return False
         else:
             message =  'Expecting \',\' or \';\' when seeking for next field separator. Got \'' + \
-                str(self._text.nextToken()) + '\''
+                str(self._text.nextTokenText()) + '\''
             raise LuaParseError(message)
 
     def _hasNextField(self):
@@ -239,103 +326,70 @@ class PyLuaTblParser:
     def _nextField(self):
         key = None
         value = None
+        token = None
         c = self._text.nextTokenChar()
         if(c == '{'):
             key = self._nextTable()
-        elif(c == '\'' or c == '\"'):
-            key = self._nextString()
-            if(self._text.nextTokenChar() == '='):
-                message = 'String cannot be key in lua table! Detected in string \'' + key + '\''
-                raise LuaParseError(message)
         else:
-            key = self._text.nextTokenBefore(['=', ',', ';', '}'])
-            if(key.length() == 0):
+            token = self._text.nextTokenBefore(['=', ',', ';', '}'])
+            if(token is None):
                 message =  'Expecting field or key before \'' + \
                     str(self._text.nextChar()) + '\''
                 raise LuaParseError(message)
-            key = self._parseToken(key)
-
         c = self._text.nextTokenChar()
-        value = None
         if(c == '='):
             self._text.moveNext()
+            if(key is not None):
+                message =  'Table key cannot be table! Before \'' + \
+                    str(self._text.nextTokenText()) + '\''
+                raise LuaParseError(message)
+            #check validity of the token
+            if(token.getType() == _TOKEN_BOOLEAN):
+                message =  'Table key cannot be boolean! Before \'' + \
+                    str(self._text.nextTokenText()) + '\''
+                raise LuaParseError(message)
+            if(token.getType() == _TOKEN_NONE):
+                message =  'Table key cannot be nil! Before \'' + \
+                    str(self._text.nextTokenText()) + '\''
+                raise LuaParseError(message)    
+            if(token.getType() == _TOKEN_BOOLEAN):
+                message =  'Table key cannot be boolean! Before \'' + \
+                    str(self._text.nextTokenText()) + '\''
+                raise LuaParseError(message)   
+            if(token.getType() == _TOKEN_NUMBER):
+                message =  'Table key cannot be number! Before \'' + \
+                    str(self._text.nextTokenText()) + '\''
+                raise LuaParseError(message) 
+            if(token.getType() == _TOKEN_STRING):
+                message =  'Table key cannot be string! Before \'' + \
+                    str(self._text.nextTokenText()) + '\''
+                raise LuaParseError(message)
+            key = token.getValue()
             value = self._nextValue()
         else:
             value = key
             key = None
+            if(value is None):
+                value = token.getValue()
         return (key, value)
 
     def _nextValue(self):
         value = None
+        token = None
         c = self._text.nextTokenChar()
         if(c == '{'):
             value = self._nextTable()
-        elif(c == '\'' or c == '\"'):
-            value = self._nextString()
         else:
-            value = self._text.nextTokenBefore([',', ';', '}'])
-            if(value.length() == 0):
+            token = self._text.nextTokenBefore([',', ';', '}'])
+            if(token is None):
                 message =  'Expecting value before \'' + \
                     str(self._text.nextChar()) + '\''
-                raise LuaParseError(message)
-            value = self._parseToken(value)
+                raise LuaParseError(message)         
+            value = token.getValue()
         return value
 
     def _nextString(self):
-       return self._text.nextString()
-
-    @staticmethod
-    def _parseToken(token):
-        tokenStr = str(token)
-        if(tokenStr == 'nil'):
-            return None
-        if(tokenStr == 'true'):
-            return True
-        if(tokenStr == 'false'):
-            return False
-
-        (isNumber, number) = PyLuaTblParser._tryParseNumber(tokenStr)
-        if(isNumber):
-            return number
-        
-        if PyLuaTblParser._isLuaName(tokenStr):
-            return tokenStr
-
-        message =  'Unrecognized token \'' + tokenStr + '\''
-        raise LuaParseError(message)
-
-    @staticmethod
-    def _tryParseNumber(s):
-        try:
-            number = int(s)
-            return(True, number)
-        except Exception:
-            try:
-                number = float(s)
-                return(True, number)
-            except Exception:
-                return (False, None)
-
-    @staticmethod
-    def _tryParseString(s):
-        try:
-            result = eval(s)
-            if(not isinstance(result, basestring)):
-                return (False, None)
-            return (True, result)
-        except SyntaxError:
-            return (False, None)
-
-    @staticmethod
-    def _isLuaName(s):
-        if s[0].isdigit():
-            return False
-        for c in s:
-            if(c.isalpha() == False and c != '_'):
-                return False
-        if s in _lua_keyword:
-            return False
-        return True   
+       return self._text.nextString()   
 
 if __name__ == '__main__':
     parser = PyLuaTblParser()
