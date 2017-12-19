@@ -72,3 +72,7 @@ try:
 
     a1.update({'string' : 'updated value'}) # update the content of the Lua table similarly to dict.update()
 ```
+
+** Acknowledgements
+
+Thanks to <a href="https://github.com/william-cheung/Lua-Table-Parser">Cheung</a> for the idea and test cases.
