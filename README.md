@@ -17,6 +17,11 @@ This parser can parse Lua table with grammar as follows:
 * index ::= Number
 * index ::= String
 
+This parser will convert Lua list to Python list or dict according to wheher there exists 'key=value' pattern.
+If the table is converted to dict, then (key, value) pairs with value=None will be discarded.
+
+Only allows key to be number or string so far.
+
 This parser is able to deal with:
 * Strings as follows
 ```Lua
@@ -71,6 +76,9 @@ try:
     print a1['string']  # get the content of the Lua table
 
     a1.update({'string' : 'updated value'}) # update the content of the Lua table similarly to dict.update()
+
+except LuaParseError:
+    traceback.print_exc()
 ```
 
 ## Acknowledgements
